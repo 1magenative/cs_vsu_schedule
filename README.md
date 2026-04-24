@@ -39,7 +39,7 @@
 
 1.  **Клонируйте репозиторий:**
     ```bash
-    git clone https://github.com/yourusername/cs-vsu-schedule-app.git
+    git clone https://github.com/1magenative/cs_vsu_schedule
     cd cs-vsu-schedule-app
     ```
 
