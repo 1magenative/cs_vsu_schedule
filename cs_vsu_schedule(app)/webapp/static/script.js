@@ -8,7 +8,8 @@ let currentUser = {
     subgroup: '1',
     mode: 'обычный',
     timezone_offset: 0,
-    server_time_drift: 0 // Разница между временем сервера и телефона
+    server_time_drift: 0,
+    week_type: 0
 };
 
 let scheduleData = null;
@@ -34,12 +35,38 @@ async function init() {
     setupEventListeners();
     setInterval(updateCountdown, 1000);
     
+    const slotSelect = document.getElementById('room-slot-select');
+    if (slotSelect) {
+        slotSelect.innerHTML = '';
+        TIME_SLOTS.forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = `${s.start} - ${s.end}`;
+            opt.textContent = `${s.start} - ${s.end}`;
+            slotSelect.appendChild(opt);
+        });
+    }
+
+    const daySelect = document.getElementById('room-day-select');
+    if (daySelect) {
+        daySelect.innerHTML = '';
+        ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"].forEach(d => {
+            const opt = document.createElement('option');
+            opt.value = d;
+            opt.textContent = d;
+            daySelect.appendChild(opt);
+        });
+    }
+
     try {
         await loadMetaData();
         const profile = await fetchProfile();
         
         const weekBadge = document.getElementById('week-badge');
-        weekBadge.textContent = profile.week_type === 0 ? "Числитель" : "Знаменатель";
+        if (weekBadge) weekBadge.textContent = profile.week_type === 0 ? "Числитель" : "Знаменатель";
+        currentUser.week_type = profile.week_type;
+        
+        const weekSelect = document.getElementById('room-week-select');
+        if (weekSelect) weekSelect.value = profile.week_type;
         
         if (profile.is_updating) {
             showUpdatingMessage("⚠️ Расписание обновляется. Зайдите позже.");
@@ -48,115 +75,94 @@ async function init() {
 
         if (profile.registered) {
             currentUser = { ...currentUser, ...profile };
-            
-            // Вычисляем разницу времени с сервером
             if (profile.server_time) {
                 const phoneNow = Math.floor(Date.now() / 1000);
                 currentUser.server_time_drift = profile.server_time - phoneNow;
             }
 
             const now = getAdjustedNow();
-            const days = ["Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"];
-            currentDay = days[now.getDay()];
+            const daysArr = ["Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"];
+            currentDay = daysArr[now.getDay()];
             if (currentDay === "Воскресенье") currentDay = "Понедельник";
             
+            if (daySelect && currentDay !== "Воскресенье") daySelect.value = currentDay;
+
             updateActiveDayButton();
             updateUserInfo();
             updateModeButtons();
             await loadSchedule();
         } else {
-            showRegistration();
+            openOverlay('registration-overlay');
         }
-    } catch (e) {
-        console.error("Init error", e);
-    }
+    } catch (e) { console.error("Init error", e); openOverlay('registration-overlay'); }
 }
 
 function getAdjustedNow() {
     const now = new Date();
-    // Применяем drift (разница с сервером)
-    if (currentUser.server_time_drift) {
-        now.setSeconds(now.getSeconds() + currentUser.server_time_drift);
-    }
+    if (currentUser.server_time_drift) now.setSeconds(now.getSeconds() + currentUser.server_time_drift);
     return now;
 }
 
 function updateUserInfo() {
     const info = document.getElementById('user-info');
-    info.innerHTML = `
-        <h1>${currentUser.course}</h1>
-        <p>${currentUser.group}, подгруппа ${currentUser.subgroup}</p>
-    `;
+    if (!info) return;
+    info.innerHTML = `<h1>${currentUser.course}</h1><p>${currentUser.group}, подгруппа ${currentUser.subgroup}</p>`;
 }
 
 function updateCountdown() {
     if (!scheduleData) return;
-    
     const now = getAdjustedNow();
     const days = ["Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"];
     const todayName = days[now.getDay()];
-    
+    const container = document.getElementById('countdown-container');
+    if (!container) return;
+
     if (todayName === "Воскресенье") {
-        document.getElementById('countdown-container').classList.add('hidden');
+        container.classList.add('hidden');
         return;
     }
     
     const todaysLessons = scheduleData[todayName] || [];
     const totalSeconds = (now.getHours() * 3600) + (now.getMinutes() * 60) + now.getSeconds();
 
-    let targetSeconds = null;
-    let label = "";
-    let sub = "";
+    let targetSeconds = null; let label = ""; let sub = "";
 
-    // 1. Проверяем текущую пару
     for (const slot of TIME_SLOTS) {
         const start = parseTimeToSeconds(slot.start);
         const end = parseTimeToSeconds(slot.end);
-
         if (totalSeconds >= start && totalSeconds < end) {
             const lesson = findLessonInSchedule(todaysLessons, slot.start);
             if (lesson && !lesson.toLowerCase().includes("нет пары")) {
-                targetSeconds = end;
-                label = "До конца пары:";
-                sub = lesson.replace(/🔹|▫️|\*|_/g, '').trim();
+                targetSeconds = end; label = "До конца пары:"; sub = lesson.replace(/🔹|▫️|\*|_/g, '').trim();
                 break;
             }
         }
     }
 
-    // 2. Ищем следующую пару сегодня
     if (targetSeconds === null) {
         for (const slot of TIME_SLOTS) {
             const start = parseTimeToSeconds(slot.start);
             if (totalSeconds < start) {
                 const lesson = findLessonInSchedule(todaysLessons, slot.start);
                 if (lesson && !lesson.toLowerCase().includes("нет пары")) {
-                    targetSeconds = start;
-                    label = "До начала пары:";
-                    sub = "Следующая: " + lesson.replace(/🔹|▫️|\*|_/g, '').trim();
+                    targetSeconds = start; label = "До начала пары:"; sub = "Следующая: " + lesson.replace(/🔹|▫️|\*|_/g, '').trim();
                     break;
                 }
             }
         }
     }
 
-    const container = document.getElementById('countdown-container');
     if (targetSeconds !== null) {
         const diff = targetSeconds - totalSeconds;
-        const h = Math.floor(diff / 3600);
-        const m = Math.floor((diff % 3600) / 60);
-        const s = diff % 60;
-        
+        const h = Math.floor(diff / 3600); const m = Math.floor((diff % 3600) / 60); const s = diff % 60;
         container.classList.remove('hidden');
-        document.getElementById('countdown-label').textContent = label;
-        document.getElementById('countdown-timer').textContent = 
-            (h > 0 ? h + ":" : "") + 
-            m.toString().padStart(2, '0') + ":" + 
-            s.toString().padStart(2, '0');
-        document.getElementById('countdown-sub').textContent = sub;
-    } else {
-        container.classList.add('hidden');
-    }
+        const lEl = document.getElementById('countdown-label');
+        const tEl = document.getElementById('countdown-timer');
+        const sEl = document.getElementById('countdown-sub');
+        if (lEl) lEl.textContent = label;
+        if (tEl) tEl.textContent = (h > 0 ? h + ":" : "") + m.toString().padStart(2, '0') + ":" + s.toString().padStart(2, '0');
+        if (sEl) sEl.textContent = sub;
+    } else container.classList.add('hidden');
 }
 
 function parseTimeToSeconds(timeStr) {
@@ -165,14 +171,10 @@ function parseTimeToSeconds(timeStr) {
 }
 
 function findLessonInSchedule(lessons, timeStart) {
-    // timeStart: "08:00"
     const t = timeStart.startsWith('0') ? timeStart.substring(1) : timeStart;
     for (const l of lessons) {
-        // Очищаем строку расписания от лишнего для поиска
         const cleanLine = l.replace(/\s+/g, '');
-        if (cleanLine.includes('*' + t + '-') || cleanLine.includes('*' + timeStart + '-')) {
-            return l.split(': ').slice(1).join(': ');
-        }
+        if (cleanLine.includes('*' + t + '-') || cleanLine.includes('*' + timeStart + '-')) return l.split(': ').slice(1).join(': ');
     }
     return null;
 }
@@ -181,11 +183,11 @@ async function loadMetaData() {
     const res = await fetch(`${API_BASE}/api/meta`);
     metaData = await res.json();
     const courseSelect = document.getElementById('course-select');
+    if (!courseSelect) return;
     courseSelect.innerHTML = '<option value="">Выберите курс</option>';
     Object.keys(metaData).forEach(course => {
         const opt = document.createElement('option');
-        opt.value = course;
-        opt.textContent = course;
+        opt.value = course; opt.textContent = course;
         courseSelect.appendChild(opt);
     });
 }
@@ -197,24 +199,21 @@ async function fetchProfile() {
 
 async function loadSchedule() {
     const container = document.getElementById('schedule-container');
+    if (!container) return;
     container.innerHTML = '<div class="loading-container"><div class="loader"></div><p>Загрузка...</p></div>';
     try {
         const res = await fetch(`${API_BASE}/api/schedule/${currentUser.user_id}`);
         const data = await res.json();
-        if (data.updating) {
-            showUpdatingMessage(data.message);
-            return;
-        }
-        document.getElementById('days-nav').style.display = 'flex';
-        scheduleData = data;
-        renderSchedule();
-    } catch (e) {
-        container.innerHTML = '<div class="empty-state">Ошибка загрузки расписания</div>';
-    }
+        if (data.updating) { showUpdatingMessage(data.message); return; }
+        const nav = document.getElementById('days-nav');
+        if (nav) nav.style.display = 'flex';
+        scheduleData = data; renderSchedule();
+    } catch (e) { container.innerHTML = '<div class="empty-state">Ошибка загрузки расписания</div>'; }
 }
 
 function renderSchedule() {
     const container = document.getElementById('schedule-container');
+    if (!container) return;
     const daySchedule = scheduleData[currentDay] || [];
     if (daySchedule.length === 0) {
         container.innerHTML = '<div class="empty-state"><div class="empty-icon">🎉</div><p>Пар нет, отдыхай!</p></div>';
@@ -229,36 +228,101 @@ function renderSchedule() {
         const time = timeMatch ? timeMatch[0] : '';
         const subject = lesson.replace(/🔹|▫️|\*|_/g, '').replace(time, '').replace(':', '').trim();
         const isNone = subject.toLowerCase().includes('нет пары') || subject.toLowerCase().includes('похуй, домой') || subject.toLowerCase().includes('по пивку, чилл');
-        card.innerHTML = `
-            <div class="lesson-time">${time}</div>
-            <div class="lesson-name" style="${isNone ? 'color: var(--text-secondary); font-style: italic;' : ''}">${subject}</div>
-        `;
+        card.innerHTML = `<div class="lesson-time">${time}</div><div class="lesson-name" style="${isNone ? 'color: var(--text-secondary); font-style: italic;' : ''}">${subject}</div>`;
         container.appendChild(card);
     });
 }
 
-function updateModeButtons() {
-    document.querySelectorAll('.mode-btn').forEach(btn => {
-        if (btn.dataset.mode === currentUser.mode) btn.classList.add('active');
-        else btn.classList.remove('active');
-    });
+// Управление окнами (Overlays)
+function openOverlay(id) {
+    const el = document.getElementById(id);
+    if (el) {
+        el.classList.remove('hidden');
+        document.body.classList.add('no-scroll');
+    }
 }
 
-function showRegistration() {
-    document.getElementById('registration-overlay').classList.remove('hidden');
+function closeOverlay(id) {
+    const el = document.getElementById(id);
+    if (el) {
+        el.classList.add('hidden');
+        // Проверяем, остались ли открытые оверлеи
+        const visibleOverlays = document.querySelectorAll('.overlay:not(.hidden)');
+        if (visibleOverlays.length === 0) {
+            document.body.classList.remove('no-scroll');
+        }
+    }
 }
 
 function setupEventListeners() {
-    document.getElementById('settings-btn').addEventListener('click', () => document.getElementById('settings-overlay').classList.remove('hidden'));
-    document.getElementById('close-settings').addEventListener('click', () => document.getElementById('settings-overlay').classList.add('hidden'));
-    document.getElementById('close-registration').addEventListener('click', () => document.getElementById('registration-overlay').classList.add('hidden'));
-    document.getElementById('days-nav').addEventListener('click', (e) => {
+    const safeAdd = (id, event, fn) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener(event, fn);
+    };
+
+    safeAdd('settings-btn', 'click', () => openOverlay('settings-overlay'));
+    safeAdd('close-settings', 'click', () => closeOverlay('settings-overlay'));
+    safeAdd('search-btn', 'click', () => openOverlay('search-overlay'));
+    safeAdd('close-search', 'click', () => closeOverlay('search-overlay'));
+    safeAdd('close-registration', 'click', () => closeOverlay('registration-overlay'));
+    safeAdd('close-report', 'click', () => closeOverlay('report-overlay'));
+
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            const tab = btn.dataset.tab;
+            const tBox = document.getElementById('teacher-search-box');
+            const rBox = document.getElementById('rooms-search-box');
+            if (tBox) tBox.classList.toggle('hidden', tab !== 'teacher');
+            if (rBox) rBox.classList.toggle('hidden', tab !== 'rooms');
+            const res = document.getElementById('search-results');
+            if (res) res.innerHTML = '';
+        });
+    });
+
+    safeAdd('do-teacher-search', 'click', async () => {
+        const input = document.getElementById('teacher-input');
+        const name = input ? input.value.trim() : "";
+        if (name.length < 3) { tg.showAlert("Введите минимум 3 буквы"); return; }
+        const resList = document.getElementById('search-results');
+        if (resList) resList.innerHTML = '<p style="text-align:center">Ищу...</p>';
+        try {
+            const res = await fetch(`${API_BASE}/api/search/teacher?name=${encodeURIComponent(name)}`);
+            const data = await res.json();
+            if (resList) {
+                if (data.length === 0) resList.innerHTML = '<p style="text-align:center">Ничего не найдено</p>';
+                else resList.innerHTML = data.map(item => `<div class="search-item"><h4>${item.day} | ${item.time}</h4><p><b>[${item.week_type}]</b></p><p>${item.course}, ${item.group}</p><p>${item.subject}</p></div>`).join('');
+            }
+        } catch (e) { if (resList) resList.innerHTML = '<p>Ошибка поиска</p>'; }
+    });
+
+    safeAdd('do-room-search', 'click', async () => {
+        const day = document.getElementById('room-day-select').value;
+        const week = document.getElementById('room-week-select').value;
+        const slot = document.getElementById('room-slot-select').value;
+        const resList = document.getElementById('search-results');
+        if (resList) resList.innerHTML = '<p style="text-align:center">Проверяю аудитории...</p>';
+        try {
+            const res = await fetch(`${API_BASE}/api/search/rooms?day=${day}&slot=${encodeURIComponent(slot)}&week_type=${week}`);
+            const data = await res.json();
+            if (resList) {
+                let html = '';
+                if (data.main.length > 0) html += `<div class="room-card"><h4>Главный / 2 корпус</h4><div class="room-text">${data.main.join(', ')}</div></div>`;
+                if (data.p.length > 0) html += `<div class="room-card"><h4>Пристройка (П)</h4><div class="room-text">${data.p.join(', ')}</div></div>`;
+                resList.innerHTML = html || '<p style="text-align:center">Все аудитории заняты</p>';
+            }
+        } catch (e) { if (resList) resList.innerHTML = '<p>Ошибка поиска</p>'; }
+    });
+
+    safeAdd('days-nav', 'click', (e) => {
         const btn = e.target.closest('.day-btn');
         if (!btn) return;
         currentDay = btn.dataset.day;
         updateActiveDayButton();
         if (scheduleData) renderSchedule();
     });
+
     document.querySelectorAll('.mode-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
             const mode = btn.dataset.mode;
@@ -277,25 +341,26 @@ function setupEventListeners() {
             } catch (e) { tg.showAlert("Ошибка при смене режима"); }
         });
     });
-    document.getElementById('edit-profile-btn').addEventListener('click', () => {
-        document.getElementById('reg-title').textContent = "Изменение профиля";
-        document.getElementById('settings-overlay').classList.add('hidden');
-        showRegistration();
+
+    safeAdd('edit-profile-btn', 'click', () => {
+        const t = document.getElementById('reg-title'); if (t) t.textContent = "Изменение профиля";
+        closeOverlay('settings-overlay');
+        openOverlay('registration-overlay');
     });
-    document.getElementById('course-select').addEventListener('change', (e) => {
+
+    safeAdd('course-select', 'change', (e) => {
         const course = e.target.value;
-        const groupSelect = document.getElementById('group-select');
+        const groupSelect = document.getElementById('group-select'); if (!groupSelect) return;
         groupSelect.innerHTML = '<option value="">Выберите группу</option>';
         if (course && metaData[course]) {
             metaData[course].forEach(group => {
-                const opt = document.createElement('option');
-                opt.value = group;
-                opt.textContent = group;
+                const opt = document.createElement('option'); opt.value = group; opt.textContent = group;
                 groupSelect.appendChild(opt);
             });
             groupSelect.disabled = false;
         } else groupSelect.disabled = true;
     });
+
     document.querySelectorAll('.sub-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             document.querySelectorAll('.sub-btn').forEach(b => b.classList.remove('active'));
@@ -303,13 +368,14 @@ function setupEventListeners() {
             currentUser.subgroup = btn.dataset.val;
         });
     });
-    document.getElementById('save-profile').addEventListener('click', async () => {
-        const course = document.getElementById('course-select').value;
-        const group = document.getElementById('group-select').value;
+
+    safeAdd('save-profile', 'click', async () => {
+        const cSel = document.getElementById('course-select');
+        const gSel = document.getElementById('group-select');
+        const course = cSel ? cSel.value : "";
+        const group = gSel ? gSel.value : "";
         if (!course || !group) { tg.showAlert("Пожалуйста, заполните все поля"); return; }
-        const btn = document.getElementById('save-profile');
-        btn.textContent = "Сохранение...";
-        btn.disabled = true;
+        const btn = document.getElementById('save-profile'); btn.textContent = "Сохранение..."; btn.disabled = true;
         try {
             const res = await fetch(`${API_BASE}/api/update_profile`, {
                 method: 'POST',
@@ -318,20 +384,22 @@ function setupEventListeners() {
             });
             if (res.ok) {
                 currentUser.course = course; currentUser.group = group;
-                document.getElementById('registration-overlay').classList.add('hidden');
+                closeOverlay('registration-overlay');
                 updateUserInfo(); await loadSchedule();
                 if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
             }
         } catch (e) { tg.showAlert("Ошибка при сохранении"); }
         finally { btn.textContent = "Сохранить"; btn.disabled = false; }
     });
-    document.getElementById('open-report-btn').addEventListener('click', () => {
-        document.getElementById('settings-overlay').classList.add('hidden');
-        document.getElementById('report-overlay').classList.remove('hidden');
+
+    safeAdd('open-report-btn', 'click', () => {
+        closeOverlay('settings-overlay');
+        openOverlay('report-overlay');
     });
-    document.getElementById('close-report').addEventListener('click', () => document.getElementById('report-overlay').classList.add('hidden'));
-    document.getElementById('send-report').addEventListener('click', async () => {
-        const text = document.getElementById('report-text').value.trim();
+
+    safeAdd('send-report', 'click', async () => {
+        const rt = document.getElementById('report-text');
+        const text = rt ? rt.value.trim() : "";
         if (!text) return;
         const btn = document.getElementById('send-report');
         btn.disabled = true; btn.textContent = "Отправка...";
@@ -343,8 +411,8 @@ function setupEventListeners() {
             });
             if (res.ok) {
                 tg.showAlert("Жалоба отправлена админу. Спасибо!");
-                document.getElementById('report-overlay').classList.add('hidden');
-                document.getElementById('report-text').value = '';
+                closeOverlay('report-overlay');
+                if (rt) rt.value = '';
                 if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
             }
         } catch (e) { tg.showAlert("Ошибка при отправке"); }
@@ -365,10 +433,18 @@ function updateActiveDayButton() {
     });
 }
 
+function updateModeButtons() {
+    document.querySelectorAll('.mode-btn').forEach(btn => {
+        if (btn.dataset.mode === currentUser.mode) btn.classList.add('active');
+        else btn.classList.remove('active');
+    });
+}
+
 function showUpdatingMessage(msg) {
     const container = document.getElementById('schedule-container');
-    container.innerHTML = `<div class="empty-state"><div class="empty-icon">🛠</div><p>${msg}</p></div>`;
-    document.getElementById('days-nav').style.display = 'none';
+    if (container) container.innerHTML = `<div class="empty-state"><div class="empty-icon">🛠</div><p>${msg}</p></div>`;
+    const nav = document.getElementById('days-nav');
+    if (nav) nav.style.display = 'none';
 }
 
 init();

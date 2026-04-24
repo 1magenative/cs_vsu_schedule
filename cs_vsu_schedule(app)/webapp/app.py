@@ -31,6 +31,14 @@ class UserReport(BaseModel):
     user_name: str
     text: str
 
+@app.get("/api/search/teacher")
+async def search_teacher(name: str):
+    return parser.get_teacher_schedule(name)
+
+@app.get("/api/search/rooms")
+async def search_rooms(day: str, slot: str, week_type: int):
+    return parser.get_free_classrooms(day, slot, week_type)
+
 @app.get("/api/profile/{user_id}")
 async def get_profile(user_id: int):
     await database.update_last_active(user_id)

@@ -46,6 +46,8 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
 
+# --- Состояния FSM ---
+
 class Registration(StatesGroup):
     choosing_course = State()
     choosing_group = State()
@@ -59,6 +61,10 @@ class TeacherSearch(StatesGroup):
 
 class BroadcastState(StatesGroup):
     waiting_for_message = State()
+
+class FreeRoomSearch(StatesGroup):
+    choosing_day_week = State()
+    choosing_slot = State()
 
 # --- Вспомогательные функции ---
 
@@ -76,7 +82,7 @@ def get_main_keyboard():
         [KeyboardButton(text="📅 Пятница"), KeyboardButton(text="📅 Суббота")],
         [KeyboardButton(text="📌 На сегодня"), KeyboardButton(text="➡️ На завтра")],
         [KeyboardButton(text="🗓 Расписание на неделю")],
-        [KeyboardButton(text="🔍 Поиск преподавателя")],
+        [KeyboardButton(text="🔍 Поиск")],
         [KeyboardButton(text="📱 Открыть Mini App", web_app=types.WebAppInfo(url=os.getenv("WEBAPP_URL", "http://localhost:8000")))],
         [KeyboardButton(text="⚙️ Режим"), KeyboardButton(text="🆘 Неправильное расписание?")],
         [KeyboardButton(text="👤 Мой профиль")]
@@ -200,11 +206,101 @@ async def get_schedule_text(user_id, target_date: datetime, day_name: str = None
         text += "\n\n".join(day_schedule)
     return text
 
-@dp.message(F.text == "🔍 Поиск преподавателя")
-async def teacher_search_start(message: types.Message, state: FSMContext):
+@dp.message(F.text == "🔍 Поиск")
+async def show_search_menu(message: types.Message):
     await track_activity(message.from_user.id)
-    await message.answer("Введите фамилию преподавателя (или часть фамилии):")
+    builder = InlineKeyboardBuilder()
+    builder.button(text="👨‍🏫 Преподаватель", callback_data="search_teacher")
+    builder.button(text="🚪 Свободные аудитории", callback_data="search_free_rooms")
+    builder.adjust(1)
+    await message.answer("Что будем искать?", reply_markup=builder.as_markup())
+
+@dp.callback_query(F.data == "search_teacher")
+async def teacher_search_start_cb(callback: types.CallbackQuery, state: FSMContext):
+    await track_activity(callback.from_user.id)
+    await callback.message.answer("Введите фамилию преподавателя (или часть фамилии):")
     await state.set_state(TeacherSearch.waiting_for_name)
+    await callback.answer()
+
+@dp.callback_query(F.data == "search_free_rooms")
+async def free_rooms_day_week_cb(callback: types.CallbackQuery, state: FSMContext):
+    await track_activity(callback.from_user.id)
+    now = await get_now()
+    week_type = await get_display_week_type(now)
+    
+    # Короткие метки для текущего момента
+    week_label = "Числитель" if week_type == 0 else "Знаменатель"
+    day_name = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"][now.weekday()]
+    
+    builder = InlineKeyboardBuilder()
+    # Кнопка "На текущий момент"
+    builder.button(text=f"✨ СЕЙЧАС ({day_name}, {week_label})", callback_data=f"roomdw_curr")
+    
+    # Список дней с выбором недели
+    days = [
+        ("Понедельник", "Пн"), ("Вторник", "Вт"), ("Среда", "Ср"), 
+        ("Четверг", "Чт"), ("Пятница", "Пт"), ("Суббота", "Сб")
+    ]
+    
+    for full_name, short_name in days:
+        builder.button(text=f"{short_name} [Числитель]", callback_data=f"roomdw_{full_name}_0")
+        builder.button(text=f"{short_name} [Знаменатель]", callback_data=f"roomdw_{full_name}_1")
+    
+    builder.adjust(1, 2)
+    await callback.message.edit_text("📅 *Выбор дня и недели*\nУкажите, на когда ищем свободные аудитории:", 
+                                   reply_markup=builder.as_markup(), parse_mode="Markdown")
+    await state.set_state(FreeRoomSearch.choosing_day_week)
+    await callback.answer()
+
+@dp.callback_query(FreeRoomSearch.choosing_day_week, F.data.startswith("roomdw_"))
+async def free_rooms_slot_cb(callback: types.CallbackQuery, state: FSMContext):
+    if callback.data == "roomdw_curr":
+        now = await get_now()
+        week_type = await get_display_week_type(now)
+        days_map = {0:"Понедельник", 1:"Вторник", 2:"Среда", 3:"Четверг", 4:"Пятница", 5:"Суббота", 6:"Воскресенье"}
+        day_name = days_map.get(now.weekday())
+    else:
+        parts = callback.data.split("_")
+        day_name = parts[1]
+        week_type = int(parts[2])
+    
+    await state.update_data(search_day=day_name, search_week=week_type)
+    builder = InlineKeyboardBuilder()
+    for slot in parser.TIME_SLOTS:
+        builder.button(text=slot, callback_data=f"roomslot_{slot}")
+    builder.adjust(2)
+    
+    week_name = "Числитель" if week_type == 0 else "Знаменатель"
+    await callback.message.answer(f"Ищем на: *{day_name}* ({week_name})\nТеперь выберите временной слот:", 
+                                reply_markup=builder.as_markup(), parse_mode="Markdown")
+    await state.set_state(FreeRoomSearch.choosing_slot)
+    await callback.answer()
+
+@dp.callback_query(FreeRoomSearch.choosing_slot, F.data.startswith("roomslot_"))
+async def process_free_rooms(callback: types.CallbackQuery, state: FSMContext):
+    slot = callback.data.split("_")[1]
+    data = await state.get_data()
+    day_name = data.get('search_day')
+    week_type = data.get('search_week')
+    
+    if day_name == "Воскресенье":
+        await callback.message.answer("Сегодня воскресенье, все аудитории свободны!")
+        await state.clear()
+        return
+
+    rooms = parser.get_free_classrooms(day_name, slot, week_type)
+    week_name = "Числитель" if week_type == 0 else "Знаменатель"
+    text = f"🚪 *Свободные аудитории*\n📅 {day_name} ({week_name})\n⏰ Время: {slot}\n" + "─" * 20 + "\n\n"
+    if not rooms['main'] and not rooms['p']:
+        text += "Все аудитории заняты! 😱"
+    else:
+        if rooms['main']:
+            text += "*Главный корпус / 2 корпус:*\n" + ", ".join(rooms['main']) + "\n\n"
+        if rooms['p']:
+            text += "*Пристройка (П):*\n" + ", ".join(rooms['p']) + "\n"
+    await callback.message.answer(text, parse_mode="Markdown")
+    await state.clear()
+    await callback.answer()
 
 @dp.message(TeacherSearch.waiting_for_name)
 async def process_teacher_search(message: types.Message, state: FSMContext):
@@ -212,25 +308,18 @@ async def process_teacher_search(message: types.Message, state: FSMContext):
     if len(name) < 3:
         await message.answer("Пожалуйста, введите хотя бы 3 буквы для поиска.")
         return
-    
     results = parser.get_teacher_schedule(name)
-    
     if not results:
-        await message.answer(f"Преподаватель '{name}' не найден в расписании.")
+        await message.answer(f"Преподаватель '{name}' не найден.")
     else:
         text = f"🔍 *Результаты поиска: {name}*\n" + "─" * 20 + "\n\n"
         for res in results:
-            text += f"📅 *{res['day']}* | {res['time']}\n"
-            text += f"🏷 [{res['week_type']}]\n"
-            text += f"🎓 {res['course']}, {res['group']}\n"
-            text += f"📖 {res['subject']}\n\n"
-        
+            text += f"📅 *{res['day']}* | {res['time']}\n🏷 [{res['week_type']}]\n🎓 {res['course']}, {res['group']}\n📖 {res['subject']}\n\n"
         if len(text) > 4000:
             await message.answer(text[:4000], parse_mode="Markdown")
             await message.answer(text[4000:], parse_mode="Markdown")
         else:
             await message.answer(text, parse_mode="Markdown")
-            
     await state.clear()
 
 @dp.message(F.text.regexp(r"(📅 (Понедельник|Вторник|Среда|Четверг|Пятница|Суббота))"))
@@ -267,13 +356,10 @@ async def show_week_schedule(message: types.Message):
     display_date = now + timedelta(days=1) if now.weekday() == 6 else now
     week_type = await get_display_week_type(display_date)
     week_name = "Числитель" if week_type == 0 else "Знаменатель"
-    
     course, group, subgroup, mode = user_data
     schedule = parser.get_schedule(course, group, subgroup, week_type)
-    
     header = f"🗓 *РАСПИСАНИЕ НА НЕДЕЛЮ* ({week_name})\n🎓 {course}, {group}, подгруппа {subgroup}\n" + "═" * 20 + "\n\n"
     await message.answer(header, parse_mode="Markdown")
-    
     days = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"]
     for day in days:
         day_schedule = schedule.get(day)
@@ -380,9 +466,7 @@ async def admin_panel(message: types.Message, edit: bool = False):
     week_name = "Числитель" if week_type == 0 else "Знаменатель"
     is_updating = await database.get_update_status()
     offset = await database.get_timezone_offset()
-    
     update_status_text = "🔴 Выключить режим обновления" if is_updating else "🟢 Включить режим обновления"
-    
     builder = InlineKeyboardBuilder()
     builder.button(text="🔄 Сменить тип недели", callback_data="toggle_week")
     builder.button(text=update_status_text, callback_data="toggle_update_mode")
@@ -391,23 +475,13 @@ async def admin_panel(message: types.Message, edit: bool = False):
     builder.button(text="➖ 1 час", callback_data="offset_minus")
     builder.button(text="➕ 1 час", callback_data="offset_plus")
     builder.adjust(1, 1, 1, 1, 2)
-    
     now = await get_now()
-    status_msg = f"⚙️ *Админ-панель*\n\n"
-    status_msg += f"📊 *Статистика:*\n"
-    status_msg += f"— Всего пользователей: {stats['total']}\n"
-    status_msg += f"— Активны сегодня: {stats['daily']}\n\n"
-    status_msg += f"📅 Неделя: {week_name}\n"
-    status_msg += f"🕒 Время бота: {now.strftime('%H:%M')}\n"
+    status_msg = f"⚙️ *Админ-панель*\n\n📊 *Статистика:*\n— Всего пользователей: {stats['total']}\n— Активны сегодня: {stats['daily']}\n\n📅 Неделя: {week_name}\n🕒 Время бота: {now.strftime('%H:%M')}\n"
     status_msg += "⚠️ *РЕЖИМ ОБНОВЛЕНИЯ ВКЛЮЧЕН*" if is_updating else "✅ Расписание доступно"
-    
     if edit:
-        try:
-            await message.edit_text(status_msg, reply_markup=builder.as_markup(), parse_mode="Markdown")
-        except:
-            pass
-    else:
-        await message.answer(status_msg, reply_markup=builder.as_markup(), parse_mode="Markdown")
+        try: await message.edit_text(status_msg, reply_markup=builder.as_markup(), parse_mode="Markdown")
+        except: pass
+    else: await message.answer(status_msg, reply_markup=builder.as_markup(), parse_mode="Markdown")
 
 @dp.callback_query(F.data.startswith("offset_"))
 async def offset_cb(callback: types.CallbackQuery):
@@ -449,12 +523,11 @@ async def process_broadcast(message: types.Message, state: FSMContext):
         try:
             await bot.send_message(uid, f"📢 *ОБЪЯВЛЕНИЕ*\n\n{message.text}", parse_mode="Markdown")
             count += 1
-            await asyncio.sleep(0.05) # Защита от спам-фильтра
+            await asyncio.sleep(0.05)
         except: pass
     await message.answer(f"✅ Рассылка завершена. Доставлено: {count}")
     await state.clear()
 
-# --- Задачи по расписанию ---
 async def auto_weekly_task():
     new_type = await database.toggle_week_type()
     parser.update_data()
@@ -463,20 +536,13 @@ async def auto_weekly_task():
 async def start_bot():
     await database.init_db()
     logger.info(f"Запуск бота. ID администратора: {ADMIN_ID}")
-    
-    await bot.set_chat_menu_button(
-        menu_button=types.MenuButtonWebApp(
-            text="Расписание",
-            web_app=types.WebAppInfo(url=os.getenv("WEBAPP_URL", "http://localhost:8000"))
-        )
-    )
-    
+    await bot.set_chat_menu_button(menu_button=types.MenuButtonWebApp(text="Расписание", web_app=types.WebAppInfo(url=os.getenv("WEBAPP_URL", "http://localhost:8000"))))
     scheduler.add_job(auto_weekly_task, 'cron', day_of_week='mon', hour=0, minute=0)
     scheduler.start()
     await dp.start_polling(bot)
 
 async def start_server():
-    config = uvicorn.Config(app, host="127.0.0.1", port=8000, log_level="info")
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()
 
