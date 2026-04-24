@@ -1,8 +1,0 @@
-aiogram
-pandas
-aiosqlite
-python-dotenv
-apscheduler
-requests
-fastapi
-uvicorn
