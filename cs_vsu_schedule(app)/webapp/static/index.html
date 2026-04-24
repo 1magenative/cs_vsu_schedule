@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Расписание ВГУ</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="style.css?v=1.6">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body class="dark-theme">
+    <div id="app">
+        <header>
+            <div class="user-info" id="user-info">
+                <div class="skeleton" style="width: 150px; height: 20px;"></div>
+            </div>
+            <div class="header-actions">
+                <div class="week-badge" id="week-badge">...</div>
+                <button id="settings-btn" class="icon-btn">⚙️</button>
+            </div>
+        </header>
+
+        <nav class="days-nav" id="days-nav">
+            <button class="day-btn active" data-day="Понедельник">Пн</button>
+            <button class="day-btn" data-day="Вторник">Вт</button>
+            <button class="day-btn" data-day="Среда">Ср</button>
+            <button class="day-btn" data-day="Четверг">Чт</button>
+            <button class="day-btn" data-day="Пятница">Пт</button>
+            <button class="day-btn" data-day="Суббота">Сб</button>
+        </nav>
+
+        <div id="countdown-container" class="countdown-card hidden">
+            <div class="countdown-label" id="countdown-label">Загрузка...</div>
+            <div class="countdown-timer" id="countdown-timer">--:--:--</div>
+            <div class="countdown-sub" id="countdown-sub">Синхронизация времени...</div>
+        </div>
+
+        <main id="schedule-container">
+            <div class="loading-container">
+                <div class="loader"></div>
+                <p>Загрузка расписания...</p>
+            </div>
+        </main>
+
+        <div id="registration-overlay" class="overlay hidden">
+            <div class="modal">
+                <div class="modal-header">
+                    <h2 id="reg-title">Регистрация</h2>
+                    <button class="close-btn" id="close-registration">&times;</button>
+                </div>
+                <div class="form-group">
+                    <label>Курс</label>
+                    <select id="course-select">
+                        <option value="">Выберите курс</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Группа</label>
+                    <select id="group-select" disabled>
+                        <option value="">Выберите группу</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Подгруппа</label>
+                    <div class="subgroup-toggle">
+                        <button class="sub-btn active" data-val="1">1</button>
+                        <button class="sub-btn" data-val="2">2</button>
+                    </div>
+                </div>
+                <button id="save-profile" class="primary-btn">Сохранить</button>
+            </div>
+        </div>
+
+        <div id="settings-overlay" class="overlay hidden">
+            <div class="modal">
+                <div class="modal-header">
+                    <h2>Настройки</h2>
+                    <button class="close-btn" id="close-settings">&times;</button>
+                </div>
+
+                <div class="settings-section">
+                    <h3>Режим отображения</h3>
+                    <div class="mode-grid">
+                        <button class="mode-btn" data-mode="обычный">Обычный</button>
+                        <button class="mode-btn" data-mode="po***">Po***</button>
+                        <button class="mode-btn" data-mode="пивко">Пивко</button>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h3>Профиль</h3>
+                    <button id="edit-profile-btn" class="secondary-btn">Изменить курс/группу</button>
+                </div>
+
+                <div class="settings-section">
+                    <h3>Поддержка</h3>
+                    <button id="open-report-btn" class="secondary-btn">Сообщить об ошибке</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="report-overlay" class="overlay hidden">
+            <div class="modal">
+                <div class="modal-header">
+                    <h2>Жалоба</h2>
+                    <button class="close-btn" id="close-report">&times;</button>
+                </div>
+                <p class="hint">Опишите ошибку или проблему:</p>
+                <textarea id="report-text" placeholder="Ваше сообщение..."></textarea>
+                <button id="send-report" class="primary-btn">Отправить админу</button>
+            </div>
+        </div>
+    </div>
+    <script src="script.js?v=1.7"></script>
+</body>
+
+</html>
