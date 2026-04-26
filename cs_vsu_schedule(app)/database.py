@@ -12,15 +12,22 @@ async def init_db():
                 group_num TEXT,
                 subgroup TEXT,
                 mode TEXT DEFAULT 'обычный',
-                last_active DATETIME DEFAULT CURRENT_TIMESTAMP
+                last_active DATETIME DEFAULT CURRENT_TIMESTAMP,
+                show_timer INTEGER DEFAULT 1,
+                timer_start_mode INTEGER DEFAULT 0,
+                show_intra_break INTEGER DEFAULT 0
             )
         """)
-        # Миграции (на случай если таблица уже создана без этих колонок)
-        try:
-            await db.execute("ALTER TABLE users ADD COLUMN mode TEXT DEFAULT 'обычный'")
+        # Миграции
+        try: await db.execute("ALTER TABLE users ADD COLUMN mode TEXT DEFAULT 'обычный'")
         except: pass
-        try:
-            await db.execute("ALTER TABLE users ADD COLUMN last_active DATETIME DEFAULT CURRENT_TIMESTAMP")
+        try: await db.execute("ALTER TABLE users ADD COLUMN last_active DATETIME DEFAULT CURRENT_TIMESTAMP")
+        except: pass
+        try: await db.execute("ALTER TABLE users ADD COLUMN show_timer INTEGER DEFAULT 1")
+        except: pass
+        try: await db.execute("ALTER TABLE users ADD COLUMN timer_start_mode INTEGER DEFAULT 0")
+        except: pass
+        try: await db.execute("ALTER TABLE users ADD COLUMN show_intra_break INTEGER DEFAULT 0")
         except: pass
 
         await db.execute("""
@@ -77,8 +84,19 @@ async def get_all_users():
 
 async def get_user_data(user_id):
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT course, group_num, subgroup, mode FROM users WHERE user_id = ?", (user_id,)) as cursor:
+        async with db.execute("SELECT course, group_num, subgroup, mode, show_timer, timer_start_mode, show_intra_break FROM users WHERE user_id = ?", (user_id,)) as cursor:
             return await cursor.fetchone()
+
+async def update_user_settings(user_id, show_timer, timer_start_mode, show_intra_break):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            UPDATE users SET 
+            show_timer = ?, 
+            timer_start_mode = ?, 
+            show_intra_break = ? 
+            WHERE user_id = ?
+        """, (show_timer, timer_start_mode, show_intra_break, user_id))
+        await db.commit()
 
 async def save_user_data(user_id, course, group_num, subgroup):
     async with aiosqlite.connect(DB_PATH) as db:

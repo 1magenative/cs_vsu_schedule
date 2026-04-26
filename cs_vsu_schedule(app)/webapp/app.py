@@ -22,6 +22,12 @@ class UserProfileUpdate(BaseModel):
     group_num: str
     subgroup: str
 
+class UserSettingsUpdate(BaseModel):
+    user_id: int
+    show_timer: int
+    timer_start_mode: int
+    show_intra_break: int
+
 class UserModeUpdate(BaseModel):
     user_id: int
     mode: str
@@ -39,6 +45,10 @@ async def search_teacher(name: str):
 async def search_rooms(day: str, slot: str, week_type: int):
     return parser.get_free_classrooms(day, slot, week_type)
 
+@app.get("/api/subgroups")
+async def get_subgroups(course: str, group: str):
+    return parser.get_subgroups(course, group)
+
 @app.get("/api/profile/{user_id}")
 async def get_profile(user_id: int):
     await database.update_last_active(user_id)
@@ -47,17 +57,28 @@ async def get_profile(user_id: int):
     is_updating = await database.get_update_status()
     offset = await database.get_timezone_offset()
     
-    from datetime import datetime, timedelta
-    server_now = datetime.now() + timedelta(hours=offset)
-    server_timestamp = int(server_now.timestamp())
+    # Расчет "времени бота" для синхронизации
+    import time
+    bot_timestamp = int(time.time() + (3 + offset) * 3600)
+    
+    # Определяем, какую неделю показывать (если воскресенье - показываем следующую)
+    from datetime import datetime, timedelta, timezone
+    msk_now = datetime.now(timezone.utc) + timedelta(hours=3 + offset)
+    display_week = week_type
+    is_next_week = False
+    if msk_now.weekday() == 6: # Воскресенье
+        display_week = 1 - week_type
+        is_next_week = True
 
     if not data:
         return {
             "registered": False, 
-            "week_type": week_type, 
+            "week_type": week_type,
+            "display_week_type": display_week,
+            "is_next_week": is_next_week,
             "is_updating": is_updating, 
             "timezone_offset": offset,
-            "server_time": server_timestamp
+            "server_time": bot_timestamp
         }
     return {
         "registered": True,
@@ -65,15 +86,25 @@ async def get_profile(user_id: int):
         "group": data[1],
         "subgroup": data[2],
         "mode": data[3],
+        "show_timer": data[4],
+        "timer_start_mode": data[5],
+        "show_intra_break": data[6],
         "week_type": week_type,
+        "display_week_type": display_week,
+        "is_next_week": is_next_week,
         "is_updating": is_updating,
         "timezone_offset": offset,
-        "server_time": server_timestamp
+        "server_time": bot_timestamp
     }
 
 @app.post("/api/update_profile")
 async def update_profile(profile: UserProfileUpdate):
     await database.save_user_data(profile.user_id, profile.course, profile.group_num, profile.subgroup)
+    return {"status": "ok"}
+
+@app.post("/api/update_settings")
+async def update_settings(settings: UserSettingsUpdate):
+    await database.update_user_settings(settings.user_id, settings.show_timer, settings.timer_start_mode, settings.show_intra_break)
     return {"status": "ok"}
 
 @app.post("/api/update_mode")
@@ -100,14 +131,18 @@ async def get_schedule(user_id: int, day: str = None):
     if not user_data:
         raise HTTPException(status_code=404, detail="User not registered")
     
-    course, group, subgroup, mode = user_data
-    week_type = await database.get_week_type() # Simplified for web app, or we can calculate like in bot
+    course, group, subgroup = user_data[0], user_data[1], user_data[2]
+    mode = user_data[3]
     
-    # Calculate week type for today
-    now = datetime.now()
-    # In bot_main.py: get_display_week_type(for_date)
-    # Let's import it or replicate logic
+    # Расчет актуальной недели с учетом воскресенья
+    offset = await database.get_timezone_offset()
+    from datetime import datetime, timedelta, timezone
+    msk_now = datetime.now(timezone.utc) + timedelta(hours=3 + offset)
+    
     current_week_type = await database.get_week_type()
+    # Если воскресенье - запрашиваем данные на следующую неделю
+    if msk_now.weekday() == 6:
+        current_week_type = 1 - current_week_type
     
     schedule = parser.get_schedule(course, group, subgroup, current_week_type)
     
