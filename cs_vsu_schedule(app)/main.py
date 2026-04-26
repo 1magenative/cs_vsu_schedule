@@ -4,7 +4,7 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -16,6 +16,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import database
 from parser import parser
+from bot_instance import bot # Используем единый экземпляр бота
 import uvicorn
 from webapp.app import app
 from fastapi import Request
@@ -28,7 +29,6 @@ async def log_requests(request: Request, call_next):
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
 try:
     ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 except ValueError:
@@ -42,7 +42,6 @@ except ValueError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
 
@@ -101,12 +100,15 @@ async def get_display_week_type(for_date: datetime):
 
 # --- Обработчики ---
 
+@dp.message(Command("chat_id"))
+async def cmd_chat_id(message: types.Message):
+    await message.answer(f"ID этого чата: {message.chat.id}")
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await track_activity(message.from_user.id)
     user_data = await database.get_user_data(message.from_user.id)
     if user_data:
-        # Распаковываем все 7 полей, но используем только первые 3 для приветствия
         course, group, subgroup = user_data[0], user_data[1], user_data[2]
         await message.answer(f"Привет! Ты уже зарегистрирован.\n🎓 {course}, {group}, подгруппа {subgroup}", reply_markup=get_main_keyboard())
     else:
@@ -174,7 +176,6 @@ async def get_schedule_text(user_id, target_date: datetime, day_name: str = None
         return "⚠️ <b>ВНИМАНИЕ</b>\n\nВ данный момент расписание обновляется. Пожалуйста, зайдите позже."
     user_data = await database.get_user_data(user_id)
     if not user_data: return "Сначала пройди регистрацию /start"
-    # Распаковываем 7 полей из БД
     course, group, subgroup, mode, show_timer, timer_mode, show_break = user_data
     week_type = await get_display_week_type(target_date)
     week_name = "Числитель" if week_type == 0 else "Знаменатель"
@@ -195,18 +196,14 @@ async def get_schedule_text(user_id, target_date: datetime, day_name: str = None
         else: text += "🎉 Пар нет, отдыхай!"
     else:
         day_schedule = apply_mode_transformations(day_schedule, mode)
-        # Очищаем от звездочек и подчеркиваний, добавляем <b>
         clean_schedule = []
         for s in day_schedule:
             s = s.replace('*', '').replace('_', '')
             if ' - ' in s or ':' in s:
                 parts = s.split(':', 1)
-                if len(parts) > 1:
-                    clean_schedule.append(f"<b>{parts[0]}</b>:{parts[1]}")
-                else:
-                    clean_schedule.append(s)
-            else:
-                clean_schedule.append(s)
+                if len(parts) > 1: clean_schedule.append(f"<b>{parts[0]}</b>:{parts[1]}")
+                else: clean_schedule.append(s)
+            else: clean_schedule.append(s)
         text += "\n\n".join(clean_schedule)
     return text
 
@@ -229,8 +226,7 @@ async def teacher_search_start_cb(callback: types.CallbackQuery, state: FSMConte
 @dp.callback_query(F.data == "search_free_rooms")
 async def free_rooms_day_week_cb(callback: types.CallbackQuery, state: FSMContext):
     await track_activity(callback.from_user.id)
-    now = await get_now()
-    week_type = await get_display_week_type(now)
+    now = await get_now(); week_type = await get_display_week_type(now)
     week_label = "Числитель" if week_type == 0 else "Знаменатель"
     day_name_short = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"][now.weekday()]
     builder = InlineKeyboardBuilder()
@@ -328,8 +324,7 @@ async def show_week_schedule(message: types.Message):
                 if ':' in s:
                     parts = s.split(':', 1)
                     clean_day.append(f"<b>{parts[0]}</b>:{parts[1]}")
-                else:
-                    clean_day.append(s)
+                else: clean_day.append(s)
             text += "\n".join(clean_day) + "\n\n"
         await message.answer(text, parse_mode="HTML")
 
@@ -357,22 +352,6 @@ async def show_mode_menu(message: types.Message):
         builder.button(text=f"{mname}{status}", callback_data=f"set_mode_{mid}")
     builder.adjust(1); await message.answer(f"Выберите режим (текущий: {current_mode}):", reply_markup=builder.as_markup())
 
-@dp.message(Command("usual"))
-async def set_mode_usual(message: types.Message):
-    await track_activity(message.from_user.id); await database.set_user_mode(message.from_user.id, "обычный")
-    await message.answer("✅ Режим изменен на: <b>обычный</b>", parse_mode="HTML")
-
-@dp.message(Command("po"))
-@dp.message(F.text.casefold() == "po***")
-async def set_mode_po_star(message: types.Message):
-    await track_activity(message.from_user.id); await database.set_user_mode(message.from_user.id, "po***")
-    await message.answer("✅ Режим изменен на: <b>po***</b>", parse_mode="HTML")
-
-@dp.message(Command("pivko"))
-async def set_mode_pivko(message: types.Message):
-    await track_activity(message.from_user.id); await database.set_user_mode(message.from_user.id, "пивко")
-    await message.answer("✅ Режим изменен на: <b>пивко</b>", parse_mode="HTML")
-
 @dp.callback_query(F.data.startswith("set_mode_"))
 async def set_mode_cb(callback: types.CallbackQuery):
     await track_activity(callback.from_user.id); mode = callback.data.split("_")[2]
@@ -388,7 +367,11 @@ async def process_report(message: types.Message, state: FSMContext):
     await track_activity(message.from_user.id); user_info = f"ID: {message.from_user.id}\nИмя: {message.from_user.full_name}"
     if message.from_user.username: user_info += f" (@{message.from_user.username})"
     await database.add_report(message.from_user.id, message.from_user.full_name, message.text)
-    await bot.send_message(REPORTS_CHAT_ID, f"🔔 <b>НОВАЯ ЖАЛОБА</b>\n\n{user_info}\n\nТекст:\n{message.text}", parse_mode="HTML")
+    # Попытка отправить в группу, иначе в личку админу
+    try:
+        await bot.send_message(REPORTS_CHAT_ID, f"🔔 <b>НОВАЯ ЖАЛОБА</b>\n\n{user_info}\n\nТекст:\n{message.text}", parse_mode="HTML")
+    except:
+        await bot.send_message(ADMIN_ID, f"🔔 <b>НОВАЯ ЖАЛОБА (в личку)</b>\n\n{user_info}\n\nТекст:\n{message.text}", parse_mode="HTML")
     await message.answer("✅ Ваше сообщение отправлено администратору. Спасибо!"); await state.clear()
 
 @dp.message(F.reply_to_message, (F.from_user.id == ADMIN_ID) | (F.chat.id == REPORTS_CHAT_ID))
@@ -423,20 +406,6 @@ async def admin_panel(message: types.Message, edit: bool = False):
         except: pass
     else: await message.answer(status_msg, reply_markup=builder.as_markup(), parse_mode="HTML")
 
-@dp.callback_query(F.data == "admin_update_data")
-async def admin_update_data_cb(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID: return
-    await callback.answer("⏳ Начинаю парсинг Excel...", show_alert=False)
-    # Можно временно изменить текст кнопки или сообщения
-    try:
-        if parser.update_data():
-            await callback.answer("✅ Расписание успешно обновлено!", show_alert=True)
-        else:
-            await callback.answer("❌ Ошибка при обновлении. Проверьте Excel-файл.", show_alert=True)
-    except Exception as e:
-        await callback.answer(f"❌ Критическая ошибка: {e}", show_alert=True)
-    await admin_panel(callback.message, edit=True)
-
 @dp.callback_query(F.data.startswith("offset_"))
 async def offset_cb(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID: return
@@ -452,6 +421,16 @@ async def toggle_update_mode_cb(callback: types.CallbackQuery):
 async def toggle_week_cb(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID: return
     await database.toggle_week_type(); await admin_panel(callback.message, edit=True); await callback.answer("Тип недели изменен")
+
+@dp.callback_query(F.data == "admin_update_data")
+async def admin_update_data_cb(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID: return
+    await callback.answer("⏳ Начинаю парсинг Excel...", show_alert=False)
+    try:
+        if parser.update_data(): await callback.answer("✅ Успешно обновлено!", show_alert=True)
+        else: await callback.answer("❌ Ошибка парсинга.", show_alert=True)
+    except Exception as e: await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+    await admin_panel(callback.message, edit=True)
 
 @dp.callback_query(F.data == "admin_broadcast")
 async def broadcast_start(callback: types.CallbackQuery, state: FSMContext):
